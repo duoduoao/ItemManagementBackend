@@ -4,7 +4,7 @@ on:
     workflow_dispatch:
     push:
         branches:
-            - main
+            - master
 env:
     AZURE_WEBAPP_NAME: "ItemManagementBackend" # set this to your application's name
     AZURE_WEBAPP_PACKAGE_PATH: './ItemManagement.WebAPI/publish/' # set this to the path to your web app project, defaults to the repository root
