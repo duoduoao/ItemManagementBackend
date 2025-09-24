@@ -5,6 +5,9 @@ using ItemManagement.Application.UseCasesInterfaces;
 using ItemManagement.Application.UserCases;
 using ItemManagement.Domain.Entities;
 using ItemManagement.Domain.Repositories;
+using ItemManagement.Infrastructure.Data;
+using ItemManagement.Infrastructure.Repository;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 using System;
 using System.Collections.Generic;
@@ -14,128 +17,101 @@ using Xunit;
 
 namespace ItemManagement.Application.Tests.UseCases
 {
-    public class TransactionsUseCasesTests
-    {
-        private readonly Mock<IUnitOfWork> _unitOfWorkMock;
-        private readonly Mock<IItemsUseCases> _itemsUseCasesMock;
-        private readonly Mock<IMapper> _mapperMock;
-        private readonly TransactionsUseCases _useCases;
-
-        public TransactionsUseCasesTests()
+    public class TransactionRepositoryTests
+    { 
+    private ApplicationDbContext CreateInMemoryDbContext()
         {
-            _unitOfWorkMock = new Mock<IUnitOfWork>();
-            _itemsUseCasesMock = new Mock<IItemsUseCases>();
-            _mapperMock = new Mock<IMapper>();
-
-            _useCases = new TransactionsUseCases(
-                _unitOfWorkMock.Object,
-                _itemsUseCasesMock.Object,
-                _mapperMock.Object
-            );
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString()) // Unique DB per test
+                .Options;
+            return new ApplicationDbContext(options);
         }
 
         [Fact]
-        public void GetTodayTransactions_ShouldReturnMappedDtos()
+        public void Get_ReturnsAllTransactions()
         {
-            // Arrange
-            var domainTransactions = new List<Transaction>
-            {
-                new Transaction { TransactionId = 1, CashierName = "Cashier1", ItemName = "Test", SoldQty = 5, TimeStamp = DateTime.Now }
-            };
+            using var context = CreateInMemoryDbContext();
+            context.Transactions.Add(new Transaction { TransactionId = 1, CashierName = "John" });
+            context.Transactions.Add(new Transaction { TransactionId = 2, CashierName = "Jane" });
+            context.SaveChanges();
 
-            var mapped = new List<TransactionDto>
-            {
-                new TransactionDto { TransactionId = 1, CashierName = "Cashier1", ItemName = "Test", SoldQty = 5 }
-            };
+            var repo = new TransactionRepository(context);
+            var result = repo.Get("anyname").ToList();
 
-            _unitOfWorkMock.Setup(u => u.Transaction.GetByDay("Cashier1", It.IsAny<DateTime>()))
-                           .Returns(domainTransactions);
-            _mapperMock.Setup(m => m.Map<IEnumerable<TransactionDto>>(domainTransactions))
-                       .Returns(mapped);
-
-            // Act
-            var result = _useCases.GetTodayTransactions("Cashier1");
-
-            // Assert
-            Assert.Single(result);
-            Assert.Equal("Test", result.First().ItemName);
+            Assert.Equal(2, result.Count);
         }
 
         [Fact]
-        public async Task RecordTransactionAsync_ShouldCallSaveAndCommit()
+        public void GetByDay_FiltersByCashierNameAndDate()
         {
-            // Arrange
-            // Arrange
-            var itemDto = new ItemDto
-            {
-                Name = "Item1",
-                Price = 10.0,
-                Quantity = 100,
-            };
-            _itemsUseCasesMock
-      .Setup(m => m.GetItemByIdUseCase(It.IsAny<int>()))
-      .ReturnsAsync(itemDto);
+            using var context = CreateInMemoryDbContext();
+            var date = DateTime.Today;
+            context.Transactions.Add(new Transaction { TransactionId = 1, CashierName = "John", TimeStamp = date });
+            context.Transactions.Add(new Transaction { TransactionId = 2, CashierName = "Jane", TimeStamp = date });
+            context.Transactions.Add(new Transaction { TransactionId = 3, CashierName = "John", TimeStamp = date.AddDays(-1) });
+            context.SaveChanges();
 
+            var repo = new TransactionRepository(context);
+            var results = repo.GetByDay("John", date).ToList();
 
-            // Act
-            await _useCases.RecordTransactionAsync("Cashier2", 1, 5);
-
-            // Assert
-            _unitOfWorkMock.Verify(u => u.Transaction.Save("Cashier2", 1, "Item1", 10.0, 100, 5), Times.Once);
-            _unitOfWorkMock.Verify(u => u.SaveAsync(), Times.Once);
+            Assert.Single(results);
+            Assert.All(results, t => Assert.Equal("John", t.CashierName));
+            Assert.All(results, t => Assert.Equal(date.Date, t.TimeStamp.Date));
         }
 
         [Fact]
-        public void GetTransactions_ShouldMapFromRepository()
+        public void Save_AddsTransaction()
         {
-            // Arrange
-            var domainTransactions = new List<Transaction>
-            {
-                new Transaction { TransactionId = 10, CashierName = "Cashier3", ItemName = "Sample", SoldQty = 2 }
-            };
+            using var context = CreateInMemoryDbContext();
+            var repo = new TransactionRepository(context);
 
-            var mapped = new List<TransactionDto>
-            {
-                new TransactionDto { TransactionId = 10, CashierName = "Cashier3", ItemName = "Sample", SoldQty = 2 }
-            };
+            repo.Save("John", 1, "Item1", 10.0, 5, 2);
 
-            _unitOfWorkMock.Setup(u => u.Transaction.Search("Cashier3", It.IsAny<DateTime>(), It.IsAny<DateTime>()))
-                           .Returns(domainTransactions);
-            _mapperMock.Setup(m => m.Map<IEnumerable<TransactionDto>>(domainTransactions))
-                       .Returns(mapped);
-
-            // Act
-            var result = _useCases.GetTransactions("Cashier3", DateTime.Now.AddDays(-1), DateTime.Now);
-
-            // Assert
-            Assert.Single(result);
-            Assert.Equal("Sample", result.First().ItemName);
+            var saved = context.Transactions.FirstOrDefault();
+            Assert.NotNull(saved);
+            Assert.Equal("John", saved.CashierName);
+            Assert.Equal(1, saved.ItemId);
+            Assert.Equal("Item1", saved.ItemName);
+            Assert.Equal(10.0, saved.Price);
+            Assert.Equal(5, saved.BeforeQty);
+            Assert.Equal(2, saved.SoldQty);
         }
 
         [Fact]
-        public void GetAllTransactions_ShouldReturnAll()
+        public void Search_FiltersByCashierNameAndDateRange()
         {
-            // Arrange
-            var domainTransactions = new List<Transaction>
+            using var context = CreateInMemoryDbContext();
+            var startDate = DateTime.Today.AddDays(-2);
+            var endDate = DateTime.Today;
+            context.Transactions.Add(new Transaction { TransactionId = 1, CashierName = "John", TimeStamp = DateTime.Today.AddDays(-1) });
+            context.Transactions.Add(new Transaction { TransactionId = 2, CashierName = "Jane", TimeStamp = DateTime.Today.AddDays(-1) });
+            context.Transactions.Add(new Transaction { TransactionId = 3, CashierName = "John", TimeStamp = DateTime.Today.AddDays(-3) });
+            context.SaveChanges();
+
+            var repo = new TransactionRepository(context);
+            var results = repo.Search("John", startDate, endDate).ToList();
+
+            Assert.Single(results);
+            Assert.All(results, t => Assert.Equal("John", t.CashierName));
+
+            Assert.All(results, t =>
             {
-                new Transaction { TransactionId = 20, CashierName = "Cashier4", ItemName = "AllItem", SoldQty = 7 }
-            };
+                Assert.True(t.TimeStamp >= startDate.Date && t.TimeStamp <= endDate.Date.AddDays(1).Date);
+            });
+        }
 
-            var mapped = new List<TransactionDto>
-            {
-                new TransactionDto { TransactionId = 20, CashierName = "Cashier4", ItemName = "AllItem", SoldQty = 7 }
-            };
+        [Fact]
+        public void GetAll_ReturnsAllTransactions()
+        {
+            using var context = CreateInMemoryDbContext();
+            context.Transactions.Add(new Transaction { TransactionId = 1 });
+            context.Transactions.Add(new Transaction { TransactionId = 2 });
+            context.SaveChanges();
 
-            _unitOfWorkMock.Setup(u => u.Transaction.GetAll()).Returns(domainTransactions);
-            _mapperMock.Setup(m => m.Map<IEnumerable<TransactionDto>>(domainTransactions))
-                       .Returns(mapped);
+            var repo = new TransactionRepository(context);
+            var result = repo.GetAll().ToList();
 
-            // Act
-            var result = _useCases.GetAllTransactions();
-
-            // Assert
-            Assert.Single(result);
-            Assert.Equal("AllItem", result.First().ItemName);
+            Assert.Equal(2, result.Count);
         }
     }
 }

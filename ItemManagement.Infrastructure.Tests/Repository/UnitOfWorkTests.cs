@@ -3,75 +3,92 @@ using ItemManagement.Infrastructure.Data;
 using ItemManagement.Infrastructure.Repository;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
+using Moq;
 using System;
 using System.Threading.Tasks;
 using Xunit;
 
 namespace ItemManagement.Infrastructure.Tests.Repository
 {
-    public class UnitOfWorkTests : IDisposable
+    public class UnitOfWorkTests 
     {
-        private readonly ApplicationDbContext _context;
+        private readonly Mock<ApplicationDbContext> _dbContextMock;
         private readonly UnitOfWork _unitOfWork;
 
         public UnitOfWorkTests()
         {
-            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-                .UseInMemoryDatabase("TestDb_UnitOfWork_" + Guid.NewGuid())
-                .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
-                .Options;
-            _context = new ApplicationDbContext(options);
-            _context.Database.EnsureCreated();
-            _unitOfWork = new UnitOfWork(_context);
+            _dbContextMock = new Mock<ApplicationDbContext>(new DbContextOptions<ApplicationDbContext>());
+            _unitOfWork = new UnitOfWork(_dbContextMock.Object);
         }
 
         [Fact]
-        public void Repositories_ShouldBeInitialized()
+        public void Save_Calls_DbContextSaveChanges()
         {
-            Assert.NotNull(_unitOfWork.Item);
-            Assert.NotNull(_unitOfWork.Category);
-            Assert.NotNull(_unitOfWork.Transaction);
-        }
+            _dbContextMock.Setup(db => db.SaveChanges()).Returns(1);
 
-        [Fact]
-        public void Save_ShouldCommitChanges()
-        {
-            var category = new Category { Name = "SaveTest", Description = "Test" };
-            _context.Categories.Add(category);
             _unitOfWork.Save();
-            var saved = _context.Categories.Find(category.CategoryId);
-            Assert.NotNull(saved);
-            Assert.Equal("SaveTest", saved.Name);
+
+            _dbContextMock.Verify(db => db.SaveChanges(), Times.Once);
         }
 
         [Fact]
-        public async Task SaveAsync_ShouldCommitChanges()
+        public async Task SaveAsync_Calls_DbContextSaveChangesAsync()
         {
-            var category = new Category { Name = "SaveAsyncTest", Description = "Test" };
-            _context.Categories.Add(category);
+            _dbContextMock.Setup(db => db.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
             var result = await _unitOfWork.SaveAsync();
-            Assert.True(result > 0);
-            var saved = _context.Categories.Find(category.CategoryId);
-            Assert.NotNull(saved);
-            Assert.Equal("SaveAsyncTest", saved.Name);
+
+            Assert.Equal(1, result);
+            _dbContextMock.Verify(db => db.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Fact]
-        public async Task Transaction_BeginCommitRollback_ShouldNotThrow()
+        public async Task BeginTransactionAsync_StartsAndCachesTransaction()
         {
-            // Transactions are ignored in InMemory provider, but calls should not throw with warning suppressed
+            var dbFacadeMock = new Mock<DatabaseFacade>(_dbContextMock.Object);
+            _dbContextMock.SetupGet(db => db.Database).Returns(dbFacadeMock.Object);
 
-            var transaction = await _unitOfWork.BeginTransactionAsync();
-            Assert.Null(transaction);  // InMemory provider BeginTransactionAsync returns null
+            var transactionMock = new Mock<IDbContextTransaction>();
+            dbFacadeMock.Setup(d => d.BeginTransactionAsync(It.IsAny<CancellationToken>())).ReturnsAsync(transactionMock.Object);
 
-            // Should not throw even if calling commit or rollback without real transaction
-            await _unitOfWork.CommitTransactionAsync();  // Should throw InvalidOperationException because _transaction is null
+            var tx1 = await _unitOfWork.BeginTransactionAsync();
+            var tx2 = await _unitOfWork.BeginTransactionAsync();
+
+            Assert.Same(tx1, tx2);
+            dbFacadeMock.Verify(d => d.BeginTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
         }
 
-        public void Dispose()
+        [Fact]
+        public async Task CommitTransactionAsync_CommitsAndDisposes()
         {
-            _unitOfWork?.Dispose();
-            _context?.Dispose();
+            var transactionMock = new Mock<IDbContextTransaction>();
+            SetPrivateTransaction(transactionMock.Object);
+
+            await _unitOfWork.CommitTransactionAsync();
+
+            transactionMock.Verify(t => t.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+            transactionMock.Verify(t => t.DisposeAsync(), Times.Once);
         }
+
+        [Fact]
+        public async Task RollbackTransactionAsync_RollbacksAndDisposes()
+        {
+            var transactionMock = new Mock<IDbContextTransaction>();
+            SetPrivateTransaction(transactionMock.Object);
+
+            await _unitOfWork.RollbackTransactionAsync();
+
+            transactionMock.Verify(t => t.RollbackAsync(It.IsAny<CancellationToken>()), Times.Once);
+            transactionMock.Verify(t => t.DisposeAsync(), Times.Once);
+        }
+
+        private void SetPrivateTransaction(IDbContextTransaction transaction)
+        {
+            var field = typeof(UnitOfWork).GetField("_transaction", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            field.SetValue(_unitOfWork, transaction);
+        }
+ 
     }
 }
