@@ -1,0 +1,67 @@
+name: ItemManagementBackend
+
+on:
+    workflow_dispatch:
+    push:
+        branches:
+            - main
+env:
+    AZURE_WEBAPP_NAME: "ItemManagementBackend" # set this to your application's name
+    AZURE_WEBAPP_PACKAGE_PATH: './ItemManagement.WebAPI/publish/' # set this to the path to your web app project, defaults to the repository root
+    DOTNET_VERSION: '9.x' # set this to the version of .NET you want to use
+    SOLUTION_PATH: 'ItemManagementBackend.sln' # set this to the path to your solution file
+    API_PROJECT_PATH: 'ItemManagement.WebAPI' # set this to the path to your API project file
+    PUBLISH_DIR: './publish' # set this to the directory where the published files will be placed
+
+jobs:
+    build-and-test:
+        name: Build and Test
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v4  
+        
+            - name: Setup .NET
+              uses: actions/setup-dotnet@v4
+              with:
+                  dotnet-version: ${{ env.DOTNET_VERSION }}
+
+            - name: Restore dependencies
+              run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+            - name: Build
+              run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release  --no-restore
+
+            - name: Test
+              run: dotnet test ${{ env.SOLUTION_PATH }} --configuration Release --no-restore --no-build --verbosity normal
+
+            - name: Publish
+              run: dotnet publish ${{ env.API_PROJECT_PATH }} --configuration Release --no-restore --no-build --property:PublishDir=${{ env.PUBLISH_DIR }}
+
+            - name: Archive production artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: webapp
+                  path: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+
+    deploy:
+        name: Deploy to Azure Web App
+        needs: [build-and-test]
+        runs-on: ubuntu-latest
+       
+        steps:
+            - name: Download production artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: webapp
+                  path: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+
+            - name: Deploy to Azure Web App
+              uses: azure/webapps-deploy@v2
+              with:
+                 app-name: ${{ env.AZURE_WEBAPP_NAME }}
+                 package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+                 publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISAH_PROFILE }}
+        
+    
+             
