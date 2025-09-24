@@ -11,7 +11,7 @@ env:
     DOTNET_VERSION: '9.x' # set this to the version of .NET you want to use
     SOLUTION_PATH: 'ItemManagementBackend.sln' # set this to the path to your solution file
     API_PROJECT_PATH: 'ItemManagement.WebAPI' # set this to the path to your API project file
-    PUBLISH_DIR: './ItemManagementAPI/publish' # set this to the directory where the published files will be placed
+    PUBLISH_DIR: './ItemManagement.WebAPI/publish' # set this to the directory where the published files will be placed
 
 jobs:
     build-and-test:
