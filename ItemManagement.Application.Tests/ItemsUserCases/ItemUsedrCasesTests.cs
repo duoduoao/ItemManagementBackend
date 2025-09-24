@@ -102,7 +102,7 @@ namespace ItemManagement.Application.Tests
         //    _mapperMock.Verify(m => m.Map<ItemDto>(It.IsAny<Item>()), Times.Exactly(items.Count));
         //}
 
-        //[Fact]
+        [Fact]
         public async Task GetItemByIdUseCase_ItemExists_ReturnsMappedDto()
         {
             // Arrange
