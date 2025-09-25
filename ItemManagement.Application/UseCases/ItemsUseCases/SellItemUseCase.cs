@@ -1,56 +1,48 @@
 ﻿using AutoMapper;
-using ItemManagement.Application.UserCases;
-using ItemManagement.Application.UseCaseInterfaces;
-using ItemManagement.Application.UseCasesInterfaces;
+using ItemManagement.Application.UseCaseInterfaces; 
 using ItemManagement.Domain.Repositories;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ItemManagement.Application.UseCases
 {
     public class SellItemUseCase : ISellItemUseCase
     {
-
         private readonly IUnitOfWork _unitOfWork;
         private readonly IMapper _mapper;
-        private readonly ITransactionsUseCases _transactionUseCase;  // Add this line
+        private readonly ITransactionsUseCases _transactionUseCase;
 
         public SellItemUseCase(IUnitOfWork unitOfWork, IMapper mapper, ITransactionsUseCases transactionUseCase)
         {
             _unitOfWork = unitOfWork;
             _mapper = mapper;
-              _transactionUseCase = transactionUseCase;  // Initialize here
-
+            _transactionUseCase = transactionUseCase;
         }
 
-        public async Task ExecuteAsync(string cashierName, int itemId, int qtyToSell)
+        public async Task ExecuteAsync(string cashierName, int itemId, int qtyToSell, CancellationToken cancellationToken = default)
         {
-            var item = await _unitOfWork.Item.GetItemByIdAsync(itemId);
+            var userId = cashierName;
+            var item = await _unitOfWork.Item.GetItemByIdAsync(itemId, userId, cancellationToken);
             if (item == null) return;
 
-            await using var transaction = await _unitOfWork.BeginTransactionAsync();
+            await using var transaction = await _unitOfWork.BeginTransactionAsync(cancellationToken);
 
             try
             {
                 await _transactionUseCase.RecordTransactionAsync(cashierName, itemId, qtyToSell);
 
                 item.Quantity -= qtyToSell;
-                _unitOfWork.Item.UpdateItem(item);
+                await _unitOfWork.Item.UpdateItemAsync(item, userId,cancellationToken);
 
-                await _unitOfWork.SaveAsync();
+                await _unitOfWork.SaveAsync(cancellationToken);
 
-                await transaction.CommitAsync();
+                await transaction.CommitAsync(cancellationToken);
             }
             catch
             {
-                await transaction.RollbackAsync();
+                await transaction.RollbackAsync(cancellationToken);
                 throw;
             }
-
-
         }
     }
 }

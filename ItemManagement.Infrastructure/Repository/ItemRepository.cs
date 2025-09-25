@@ -4,73 +4,91 @@ using ItemManagement.Infrastructure.Data;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using ItemManagement.Domain.Repositories;
+using ItemManagement.Application.Contract;
 
 namespace ItemManagement.Infrastructure.Repository
 {
-    public class ItemRepository :Repository<Item>, IItemRepository
+    public class ItemRepository : Repository<Item>, IItemRepository
     {
-        private readonly ApplicationDbContext db;
+        private readonly ApplicationDbContext _db;
+        private readonly ICacheService _cacheService;
 
-        public ItemRepository(ApplicationDbContext db) : base(db)
+        public ItemRepository(ApplicationDbContext db, ICacheService cacheService) : base(db)
         {
-            this.db = db;
+            _db = db;
+            _cacheService = cacheService;
         }
 
-        public void AddItem(Item Item)
+        private string GetCacheKey(int itemId, string userId) => $"item_{userId}_{itemId}";
+        private string GetCacheKeyAll(string userId) => $"items_all_{userId}";
+
+        public async Task AddItemAsync(Item item, string userId, CancellationToken cancellationToken = default)
         {
-            db.Items.Add(Item);
-           // db.SaveChanges();
+            await _db.Items.AddAsync(item, cancellationToken);
+            await _db.SaveChangesAsync(cancellationToken);
+            await _cacheService.RemoveAsync(GetCacheKeyAll(userId));
         }
 
-        public bool DeleteItem(int ItemId)
+        public async Task<bool> DeleteItemAsync(int itemId, string userId, CancellationToken cancellationToken = default)
         {
-         
-            try
-            {
-                var Item = db.Items.Find(ItemId);
-                //   if (category == null) return;
-                if (Item != null)
-                {
-                    db.Items.Remove(Item);
-          //          db.SaveChanges();
-                }
+            var item = await _db.Items.FindAsync(new object[] { itemId }, cancellationToken);
+            if (item == null) return false;
 
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            } 
+            _db.Items.Remove(item);
+            await _db.SaveChangesAsync(cancellationToken);
+
+            await _cacheService.RemoveAsync(GetCacheKey(itemId, userId));
+            await _cacheService.RemoveAsync(GetCacheKeyAll(userId));
+
+            return true;
         }
 
-        public async Task<Item> GetItemByIdAsync(int ItemId)
+        public async Task<Item> GetItemByIdAsync(int itemId, string userId, CancellationToken cancellationToken = default)
         {
-            return await db.Items.FindAsync(ItemId);
+            var cacheKey = GetCacheKey(itemId, userId);
+            var cachedItem = await _cacheService.GetAsync<Item>(cacheKey);
+            if (cachedItem != null) return cachedItem;
+
+            var item = await _db.Items.FindAsync(new object[] { itemId }, cancellationToken);
+            if (item != null)
+                await _cacheService.SetAsync(cacheKey, item, TimeSpan.FromMinutes(10));
+
+            return item;
         }
 
-        public async Task<IEnumerable<Item>> GetItemsAsync()
+        public async Task<IEnumerable<Item>> GetItemsAsync(string userId, CancellationToken cancellationToken = default)
         {
-            return await db.Items.ToListAsync();
+            var cacheKey = GetCacheKeyAll(userId);
+            var cachedItems = await _cacheService.GetAsync<IEnumerable<Item>>(cacheKey);
+            if (cachedItems != null) return cachedItems;
+
+            var items = await _db.Items.ToListAsync(cancellationToken);
+            await _cacheService.SetAsync(cacheKey, items, TimeSpan.FromMinutes(10));
+            return items;
         }
 
-        public   IQueryable<Item> GetItemsByCategoryId(int categoryId)
+        public IQueryable<Item> GetItemsByCategoryId(int categoryId)
         {
-            return db.Items
-                .Where(x => x.CategoryId == categoryId);
+            return _db.Items.Where(x => x.CategoryId == categoryId);
         }
 
-        public void UpdateItem(Item Item)
+        public async Task UpdateItemAsync(Item item, string userId, CancellationToken cancellationToken = default)
         {
-            var prod = db.Items.Find(Item.ItemId);
-            prod.CategoryId = Item.CategoryId;
-            prod.Name = Item.Name;
-            prod.Price = Item.Price;
-            prod.Quantity = Item.Quantity;
+            var dbItem = await _db.Items.FindAsync(new object[] { item.ItemId }, cancellationToken);
+            if (dbItem == null) return;
 
-           // db.SaveChanges();
+            dbItem.CategoryId = item.CategoryId;
+            dbItem.Name = item.Name;
+            dbItem.Price = item.Price;
+            dbItem.Quantity = item.Quantity;
+
+            await _db.SaveChangesAsync(cancellationToken);
+
+            await _cacheService.SetAsync(GetCacheKey(item.ItemId, userId), dbItem, TimeSpan.FromMinutes(10));
+            await _cacheService.RemoveAsync(GetCacheKeyAll(userId));
         }
     }
 }

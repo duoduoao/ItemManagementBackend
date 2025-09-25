@@ -1,16 +1,12 @@
-﻿
-using AutoMapper;
+﻿using AutoMapper;
+using ItemManagement.Application.Common.DTO;
+using ItemManagement.Application.UseCaseInterfaces;
 using ItemManagement.Domain.Entities;
 using ItemManagement.Domain.Repositories;
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
-using System.Threading.Tasks; 
- 
-using ItemManagement.Application.UseCaseInterfaces;
-using ItemManagement.Application.Common.DTO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ItemManagement.Application.UseCases
 {
@@ -18,58 +14,49 @@ namespace ItemManagement.Application.UseCases
     {
         private readonly IUnitOfWork _unitOfWork;
         private readonly IMapper _mapper;
+
         public ItemsUseCases(IUnitOfWork unitOfWork, IMapper mapper)
         {
             _unitOfWork = unitOfWork;
             _mapper = mapper;
-
-
         }
 
-
-        public async Task AddItemUseCase(ItemDto dto)
+        public async Task AddItemUseCase(ItemDto dto, string userId, CancellationToken cancellationToken = default)
         {
             var item = _mapper.Map<Item>(dto);
-            _unitOfWork.Item.AddItem(item);
-            await _unitOfWork.SaveAsync();
-
+            await _unitOfWork.Item.AddItemAsync(item, userId, cancellationToken);
+            await _unitOfWork.SaveAsync(cancellationToken);
         }
 
-        public async  Task<bool> DeleteItemUseCase(int ItemId)
+        public async Task<bool> DeleteItemUseCase(int itemId, string userId, CancellationToken cancellationToken = default)
         {
-            //add checking 
-            bool result =  _unitOfWork.Item.DeleteItem(ItemId);
-             
-            await _unitOfWork.SaveAsync();
-
+            bool result = await _unitOfWork.Item.DeleteItemAsync(itemId, userId, cancellationToken);
+            await _unitOfWork.SaveAsync(cancellationToken);
             return result;
         }
 
-        public IEnumerable<ItemDto> GetItemsUseCase()
+        public async Task<IEnumerable<ItemDto>> GetItemsUseCase(string userId, CancellationToken cancellationToken = default)
         {
-            // return _unitOfWork.Item.GetItems();
-            //return _unitOfWork.Item.GetAll(includeProperties: "Category");
-            var items = _unitOfWork.Item.GetAll(includeProperties: "Category");
-            return items.Select(item => _mapper.Map<ItemDto>(item)).ToList(); 
+            var items = await _unitOfWork.Item.GetItemsAsync(userId, cancellationToken);
+            return items.Select(item => _mapper.Map<ItemDto>(item)).ToList();
         }
 
-        public async Task<ItemDto>  GetItemByIdUseCase(int ItemId)
+        public async Task<ItemDto> GetItemByIdUseCase(int itemId, string userId, CancellationToken cancellationToken = default)
         {
-            //return _unitOfWork.Item.GetItemById(ItemId);
-            var item = await _unitOfWork.Item.GetItemByIdAsync(ItemId);
+            var item = await _unitOfWork.Item.GetItemByIdAsync(itemId, userId, cancellationToken);
             return item == null ? null : _mapper.Map<ItemDto>(item);
         }
 
-        public async Task<bool> EditItemUseCase(ItemDto dto)
+        public async Task<bool> EditItemUseCase(ItemDto dto, string userId, CancellationToken cancellationToken = default)
         {
-            var item = await  _unitOfWork.Item.GetItemByIdAsync(dto.ItemId);
+            var item = await _unitOfWork.Item.GetItemByIdAsync(dto.ItemId, userId, cancellationToken);
             if (item == null)
             {
-                return false;  // signal "item not found"
+                return false;
             }
             _mapper.Map(dto, item);
-            _unitOfWork.Item.UpdateItem(item);
-            await _unitOfWork.SaveAsync();
+            await _unitOfWork.Item.UpdateItemAsync(item, userId, cancellationToken);
+            await _unitOfWork.SaveAsync(cancellationToken);
             return true;
         }
 
@@ -77,12 +64,11 @@ namespace ItemManagement.Application.UseCases
         {
             return _unitOfWork.Item.Any(u => u.Name == name);
         }
+
         public IEnumerable<ItemDto> ViewItemsByCategoryId(int categoryId)
         {
-            // return itemRepository.GetItemsByCategoryId(categoryId);
             var items = _unitOfWork.Item.GetItemsByCategoryId(categoryId);
-            var itemDtos = _mapper.Map<IEnumerable<ItemDto>>(items);
-            return itemDtos;
+            return _mapper.Map<IEnumerable<ItemDto>>(items);
         }
     }
 }

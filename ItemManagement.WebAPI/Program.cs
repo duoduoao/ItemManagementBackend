@@ -1,17 +1,20 @@
 using AutoMapper;
 using FluentValidation;
-using ItemManagement.Application.UseCases;
 using ItemManagement.Application.Common.DTO;
 using ItemManagement.Application.Common.Validation;
-using ItemManagement.Application.UseCases;
+using ItemManagement.Application.Contract;
 using ItemManagement.Application.Mapping;
-using ItemManagement.Application.UserCases;
 using ItemManagement.Application.UseCaseInterfaces;
-using ItemManagement.Application.UseCasesInterfaces;
+using ItemManagement.Application.UseCases;
+
 using ItemManagement.Domain.Repositories;
+using ItemManagement.Infrastructure.Caching;
 using ItemManagement.Infrastructure.Data;
-using ItemManagement.Infrastructure.Repository; 
+using ItemManagement.Infrastructure.Repository;
+using ItemManagement.Infrastructure.Services;
 using ItemManagement.WebAPI.Mappings;
+using ItemManagement.WebAPI.Services.Inplement;
+using ItemManagement.WebAPI.Services.Interfaces;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics;
@@ -19,7 +22,6 @@ using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web;
 using Serilog;
-using ItemManagement.Application.UseCases;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -41,6 +43,12 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 }, ServiceLifetime.Scoped);
 
+//add for redis cache
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
+    options.InstanceName = "ItemManagementApiCache";
+});
 
 //add service
 builder.Services.AddScoped<IItemsUseCases, ItemsUseCases>();
@@ -54,6 +62,10 @@ builder.Services.AddScoped<IValidator<CategoryDto>, CategoryDtoValidator>();
 builder.Services.AddScoped<IValidator<ItemDto>, ItemDtoValidator>(); 
 builder.Services.AddScoped<IValidator<SellOrderDto>, SellOrderDtoValidator>();
 builder.Services.AddScoped<IValidator<TransactionDto>, TransactionDtoValidator>();
+
+//add for cache service
+builder.Services.AddScoped<ICacheService, RedisCacheService>();
+
 
 builder.Services.AddAutoMapper(cfg => {
     // optionally add extra mappings here
@@ -90,17 +102,21 @@ builder.Services.AddAuthentication()
 builder.Services.AddAuthorizationBuilder();
 
 
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IUserContext, UserContext>();
+
+
 var app = builder.Build();
  
-//if (app.Environment.IsDevelopment())
-//{
+if (app.Environment.IsDevelopment())
+{
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1");
         c.RoutePrefix = string.Empty;  // Serve Swagger UI at root /
     });
-//}
+}
 // Add global exception handler middleware early
 app.UseExceptionHandler(errorApp =>
 {

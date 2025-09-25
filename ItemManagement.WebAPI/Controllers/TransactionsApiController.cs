@@ -1,8 +1,7 @@
 ﻿using AutoMapper;
 using Microsoft.AspNetCore.Mvc; 
 using ItemManagement.Application.UseCaseInterfaces;
-using ItemManagement.WebAPI.Models;
-using ItemManagement.Application.UseCasesInterfaces;
+using ItemManagement.WebAPI.Models; 
 
 namespace ItemManagement.WebAPI.Controllers
 {

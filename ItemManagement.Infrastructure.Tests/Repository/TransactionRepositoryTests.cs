@@ -1,117 +1,141 @@
 ﻿using AutoMapper;
 using ItemManagement.Application.Common.DTO;
-using ItemManagement.Application.UseCaseInterfaces;
-using ItemManagement.Application.UseCasesInterfaces;
-using ItemManagement.Application.UserCases;
+using ItemManagement.Application.UseCases;
 using ItemManagement.Domain.Entities;
 using ItemManagement.Domain.Repositories;
-using ItemManagement.Infrastructure.Data;
-using ItemManagement.Infrastructure.Repository;
-using Microsoft.EntityFrameworkCore;
 using Moq;
-using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ItemManagement.Application.Tests.UseCases
+public class ItemsUseCasesTests
 {
-    public class TransactionRepositoryTests
-    { 
-    private ApplicationDbContext CreateInMemoryDbContext()
-        {
-            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-                .UseInMemoryDatabase(Guid.NewGuid().ToString()) // Unique DB per test
-                .Options;
-            return new ApplicationDbContext(options);
-        }
+    private readonly Mock<IUnitOfWork> _unitOfWorkMock;
+    private readonly Mock<IMapper> _mapperMock;
+    private readonly ItemsUseCases _itemsUseCases;
 
-        [Fact]
-        public void Get_ReturnsAllTransactions()
-        {
-            using var context = CreateInMemoryDbContext();
-            context.Transactions.Add(new Transaction { TransactionId = 1, CashierName = "John" });
-            context.Transactions.Add(new Transaction { TransactionId = 2, CashierName = "Jane" });
-            context.SaveChanges();
+    public ItemsUseCasesTests()
+    {
+        _unitOfWorkMock = new Mock<IUnitOfWork>();
+        _mapperMock = new Mock<IMapper>();
+        _itemsUseCases = new ItemsUseCases(_unitOfWorkMock.Object, _mapperMock.Object);
+    }
 
-            var repo = new TransactionRepository(context);
-            var result = repo.Get("anyname").ToList();
+    [Fact]
+    public async Task AddItemUseCase_Should_Map_And_Add_Item_Then_Save()
+    {
+        var dto = new ItemDto { ItemId = 1 };
+        var itemEntity = new Item { ItemId = 1 };
 
-            Assert.Equal(2, result.Count);
-        }
+        _mapperMock.Setup(m => m.Map<Item>(dto)).Returns(itemEntity);
+        _unitOfWorkMock.Setup(u => u.Item.AddItemAsync(itemEntity, It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _unitOfWorkMock.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).Returns(Task.FromResult(1));
 
-        [Fact]
-        public void GetByDay_FiltersByCashierNameAndDate()
-        {
-            using var context = CreateInMemoryDbContext();
-            var date = DateTime.Today;
-            context.Transactions.Add(new Transaction { TransactionId = 1, CashierName = "John", TimeStamp = date });
-            context.Transactions.Add(new Transaction { TransactionId = 2, CashierName = "Jane", TimeStamp = date });
-            context.Transactions.Add(new Transaction { TransactionId = 3, CashierName = "John", TimeStamp = date.AddDays(-1) });
-            context.SaveChanges();
+        await _itemsUseCases.AddItemUseCase(dto, "user1");
 
-            var repo = new TransactionRepository(context);
-            var results = repo.GetByDay("John", date).ToList();
+        _mapperMock.Verify(m => m.Map<Item>(dto), Times.Once);
+        _unitOfWorkMock.Verify(u => u.Item.AddItemAsync(itemEntity, "user1", It.IsAny<CancellationToken>()), Times.Once);
+        _unitOfWorkMock.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 
-            Assert.Single(results);
-            Assert.All(results, t => Assert.Equal("John", t.CashierName));
-            Assert.All(results, t => Assert.Equal(date.Date, t.TimeStamp.Date));
-        }
+    [Fact]
+    public async Task DeleteItemUseCase_Should_Call_Delete_And_Save_ReturnsTrue()
+    {
+        _unitOfWorkMock.Setup(u => u.Item.DeleteItemAsync(1, "user1", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _unitOfWorkMock.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).Returns(Task.FromResult(1));
 
-        [Fact]
-        public void Save_AddsTransaction()
-        {
-            using var context = CreateInMemoryDbContext();
-            var repo = new TransactionRepository(context);
+        var result = await _itemsUseCases.DeleteItemUseCase(1, "user1");
 
-            repo.Save("John", 1, "Item1", 10.0, 5, 2);
+        Assert.True(result);
+        _unitOfWorkMock.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 
-            var saved = context.Transactions.FirstOrDefault();
-            Assert.NotNull(saved);
-            Assert.Equal("John", saved.CashierName);
-            Assert.Equal(1, saved.ItemId);
-            Assert.Equal("Item1", saved.ItemName);
-            Assert.Equal(10.0, saved.Price);
-            Assert.Equal(5, saved.BeforeQty);
-            Assert.Equal(2, saved.SoldQty);
-        }
+    [Fact]
+    public async Task GetItemsUseCase_Should_Return_Mapped_ItemDtos()
+    {
+        var items = new List<Item> { new Item { ItemId = 1 }, new Item { ItemId = 2 } };
+        _unitOfWorkMock.Setup(u => u.Item.GetItemsAsync("user1", It.IsAny<CancellationToken>())).ReturnsAsync(items);
 
-        [Fact]
-        public void Search_FiltersByCashierNameAndDateRange()
-        {
-            using var context = CreateInMemoryDbContext();
-            var startDate = DateTime.Today.AddDays(-2);
-            var endDate = DateTime.Today;
-            context.Transactions.Add(new Transaction { TransactionId = 1, CashierName = "John", TimeStamp = DateTime.Today.AddDays(-1) });
-            context.Transactions.Add(new Transaction { TransactionId = 2, CashierName = "Jane", TimeStamp = DateTime.Today.AddDays(-1) });
-            context.Transactions.Add(new Transaction { TransactionId = 3, CashierName = "John", TimeStamp = DateTime.Today.AddDays(-3) });
-            context.SaveChanges();
+        _mapperMock.Setup(m => m.Map<ItemDto>(items[0])).Returns(new ItemDto { ItemId = 1 });
+        _mapperMock.Setup(m => m.Map<ItemDto>(items[1])).Returns(new ItemDto { ItemId = 2 });
 
-            var repo = new TransactionRepository(context);
-            var results = repo.Search("John", startDate, endDate).ToList();
+        var result = await _itemsUseCases.GetItemsUseCase("user1");
 
-            Assert.Single(results);
-            Assert.All(results, t => Assert.Equal("John", t.CashierName));
+        Assert.Collection(result,
+            dto => Assert.Equal(1, dto.ItemId),
+            dto => Assert.Equal(2, dto.ItemId)
+        );
+    }
 
-            Assert.All(results, t =>
-            {
-                Assert.True(t.TimeStamp >= startDate.Date && t.TimeStamp <= endDate.Date.AddDays(1).Date);
-            });
-        }
+    [Fact]
+    public async Task GetItemByIdUseCase_Should_Return_Mapped_ItemDto_Or_Null()
+    {
+        var item = new Item { ItemId = 1 };
+        var dto = new ItemDto { ItemId = 1 };
 
-        [Fact]
-        public void GetAll_ReturnsAllTransactions()
-        {
-            using var context = CreateInMemoryDbContext();
-            context.Transactions.Add(new Transaction { TransactionId = 1 });
-            context.Transactions.Add(new Transaction { TransactionId = 2 });
-            context.SaveChanges();
+        _unitOfWorkMock.Setup(u => u.Item.GetItemByIdAsync(1, "user1", It.IsAny<CancellationToken>())).ReturnsAsync(item);
+        _mapperMock.Setup(m => m.Map<ItemDto>(item)).Returns(dto);
 
-            var repo = new TransactionRepository(context);
-            var result = repo.GetAll().ToList();
+        var result = await _itemsUseCases.GetItemByIdUseCase(1, "user1");
+        Assert.NotNull(result);
+        Assert.Equal(1, result.ItemId);
 
-            Assert.Equal(2, result.Count);
-        }
+        _unitOfWorkMock.Setup(u => u.Item.GetItemByIdAsync(2, "user1", It.IsAny<CancellationToken>())).ReturnsAsync((Item)null);
+        result = await _itemsUseCases.GetItemByIdUseCase(2, "user1");
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task EditItemUseCase_Should_Update_And_Save_ReturnsTrue()
+    {
+        var item = new Item { ItemId = 1 };
+        var dto = new ItemDto { ItemId = 1 };
+
+        _unitOfWorkMock.Setup(u => u.Item.GetItemByIdAsync(1, "user1", It.IsAny<CancellationToken>())).ReturnsAsync(item);
+        _unitOfWorkMock.Setup(u => u.Item.UpdateItemAsync(item, "user1", It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _unitOfWorkMock.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).Returns(Task.FromResult(1));
+
+        var result = await _itemsUseCases.EditItemUseCase(dto, "user1");
+
+        _mapperMock.Verify(m => m.Map(dto, item), Times.Once);
+        Assert.True(result);
+    }
+
+    [Fact]
+    public async Task EditItemUseCase_Should_ReturnFalse_If_Item_NotFound()
+    {
+        var dto = new ItemDto { ItemId = 99 };
+        _unitOfWorkMock.Setup(u => u.Item.GetItemByIdAsync(99, "user1", It.IsAny<CancellationToken>())).ReturnsAsync((Item)null);
+
+        var result = await _itemsUseCases.EditItemUseCase(dto, "user1");
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void CheckItemExists_Should_Call_Any_On_UnitOfWork()
+    {
+        _unitOfWorkMock.Setup(u => u.Item.Any(It.IsAny<System.Linq.Expressions.Expression<System.Func<Item, bool>>>())).Returns(true);
+
+        var exists = _itemsUseCases.CheckItemExists("name");
+
+        Assert.True(exists);
+        _unitOfWorkMock.Verify(u => u.Item.Any(It.IsAny<System.Linq.Expressions.Expression<System.Func<Item, bool>>>()), Times.Once);
+    }
+
+    [Fact]
+    public void ViewItemsByCategoryId_Should_Return_Mapped_Dtos()
+    {
+        var items = new List<Item> { new Item { ItemId = 1 }, new Item { ItemId = 2 } };
+        var dtos = new List<ItemDto> { new ItemDto { ItemId = 1 }, new ItemDto { ItemId = 2 } };
+
+        _unitOfWorkMock.Setup(u => u.Item.GetItemsByCategoryId(5)).Returns(items.AsQueryable());
+        _mapperMock.Setup(m => m.Map<IEnumerable<ItemDto>>(items)).Returns(dtos);
+
+        var result = _itemsUseCases.ViewItemsByCategoryId(5);
+
+        Assert.Equal(2, result.Count());
     }
 }

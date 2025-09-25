@@ -2,6 +2,8 @@
 using ItemManagement.Application.UseCaseInterfaces;
 using ItemManagement.WebAPI.Models;
 using Microsoft.AspNetCore.Mvc;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ItemManagement.WebAPI.Controllers
 {
@@ -18,15 +20,28 @@ namespace ItemManagement.WebAPI.Controllers
             _mapper = mapper;
         }
 
-        [HttpPost("Create")]
-        public async Task<IActionResult> Create(SellOrderApiModel model)
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] SellOrderApiModel model, CancellationToken cancellationToken)
         {
-            // Call the use case to execute selling logic
-            await _sellItemUseCase.ExecuteAsync(model.CashierName, model.ItemId, model.SellQty);
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
 
-            return Ok(new { message = "Sell order processed successfully." });
+            try
+            {
+                // Call the use case to execute selling logic
+                await _sellItemUseCase.ExecuteAsync(model.CashierName, model.ItemId, model.SellQty, cancellationToken);
+
+                return Ok(new { message = "Sell order processed successfully." });
+            }
+            catch (Exception ex)
+            {
+                // Ideally log the exception here
+
+                return StatusCode(500, new { error = "An error occurred while processing the sell order.", details = ex.Message });
+            }
         }
-
     }
-
 }
+ 

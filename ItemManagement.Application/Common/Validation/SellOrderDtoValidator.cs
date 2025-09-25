@@ -1,22 +1,21 @@
 ﻿using FluentValidation;
 using ItemManagement.Application.Common.DTO;
+using ItemManagement.Application.Contract;
 using ItemManagement.Domain.Repositories;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace ItemManagement.Application.Common.Validation
-{ 
-  public class SellOrderDtoValidator : AbstractValidator<SellOrderDto>
+{
+    public class SellOrderDtoValidator : AbstractValidator<SellOrderDto>
     {
         private readonly IUnitOfWork _unitOfWork;
+        private readonly IUserContext _userContext;  // add user context service
 
-        public SellOrderDtoValidator(IUnitOfWork unitOfWork)
+        public SellOrderDtoValidator(IUnitOfWork unitOfWork, IUserContext userContext)
         {
             _unitOfWork = unitOfWork;
+            _userContext = userContext;
 
             RuleFor(x => x.CashierName)
                 .NotEmpty().WithMessage("Cashier name is required.");
@@ -25,17 +24,26 @@ namespace ItemManagement.Application.Common.Validation
                 .GreaterThan(0).WithMessage("Valid ItemId is required.");
 
             RuleFor(x => x.SellQty)
-                .GreaterThan(0).WithMessage("Sell quantity must be greater than zero.")
-                .MustAsync(SellQtyNotExceedStock)
-                .WithMessage("Sell quantity cannot exceed available stock.");
+                .GreaterThan(0).WithMessage("Sell quantity must be greater than zero.");
+
+            RuleFor(x => x).CustomAsync(SellQtyNotExceedStock);
         }
 
-        private async Task<bool> SellQtyNotExceedStock(SellOrderDto dto, int sellQty, CancellationToken cancellationToken)
+        private async Task SellQtyNotExceedStock(SellOrderDto dto, ValidationContext<SellOrderDto> context, CancellationToken cancellationToken)
         {
-            var item = await _unitOfWork.Item.GetItemByIdAsync(dto.ItemId);
-            if (item == null) return false; // or throw if item must exist
+            // get userId from injected user context service
+            var userId = _userContext.UserId;
 
-            return item.Quantity >= sellQty;
+            var item = await _unitOfWork.Item.GetItemByIdAsync(dto.ItemId, userId, cancellationToken);
+            if (item == null)
+            {
+                context.AddFailure("ItemId", "Item does not exist.");
+                return;
+            }
+            if (item.Quantity < dto.SellQty)
+            {
+                context.AddFailure("SellQty", "Sell quantity cannot exceed available stock.");
+            }
         }
     }
 }

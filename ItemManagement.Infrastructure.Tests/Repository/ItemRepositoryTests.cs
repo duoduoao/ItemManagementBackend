@@ -1,8 +1,12 @@
-﻿using ItemManagement.Domain.Entities;
+﻿using ItemManagement.Application.Contract;
+using ItemManagement.Domain.Entities;
+using ItemManagement.Domain.Repositories;
 using ItemManagement.Infrastructure.Data;
 using ItemManagement.Infrastructure.Repository;
 using ItemManagement.Infrastructure.Tests.Data;
 using Microsoft.EntityFrameworkCore;
+using Moq;
+using SendGrid.Helpers.Mail;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -10,141 +14,122 @@ using Xunit;
 
 namespace ItemManagement.Infrastructure.Tests.Repository
 {
-    public class ItemRepositoryTests
+    public class ItemRepositoryTests : IDisposable
     {
-        private ApplicationDbContext GetInMemoryDbContext()
-        {
-            var options = new DbContextOptionsBuilder<ApplicationDbContextTests>()
-                .UseInMemoryDatabase(databaseName: "TestDb_" + Guid.NewGuid())
-                .Options;
+    private readonly ApplicationDbContext _context;
+    private readonly Mock<ICacheService> _cacheServiceMock;
+    private readonly ItemRepository _repository;
 
-            var context = new ApplicationDbContextTests(options);
-            // Clean database before each test
-            context.Database.EnsureDeleted();
-            context.Database.EnsureCreated();
-            return context;
-        }
+    public ItemRepositoryTests()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()) // Unique DB per test
+            .Options;
 
-        [Fact]
-        public async Task GivenNewItem_WhenAddItem_ThenItemIsAdded()
-        {
-            await using var context = GetInMemoryDbContext();
-            var repo = new ItemRepository(context);
+        _context = new ApplicationDbContext(options);
+        _cacheServiceMock = new Mock<ICacheService>();
 
-            var item = new Item
-            {
-                CategoryId = 1,
-                Name = "Test Item",
-                Quantity = 10,
-                Price = 19.99
-            };
-
-            repo.AddItem(item);
-            await context.SaveChangesAsync();
-
-            var inserted = await context.Items.FirstOrDefaultAsync(i => i.Name == "Test Item");
-            Assert.NotNull(inserted);
-            Assert.Equal("Test Item", inserted.Name);
-        }
-
-        [Fact]
-        public async Task GivenExistingItem_WhenDeleteItem_ThenItemIsDeleted()
-        {
-            await using var context = GetInMemoryDbContext();
-            var repo = new ItemRepository(context);
-
-            var item = new Item { CategoryId = 1, Name = "ToDelete", Quantity = 5, Price = 10 };
-            await context.Items.AddAsync(item);
-            await context.SaveChangesAsync();
-
-            var result = repo.DeleteItem(item.ItemId);
-            await context.SaveChangesAsync();
-
-            Assert.True(result);
-            var deleted = await context.Items.FindAsync(item.ItemId);
-            Assert.Null(deleted);
-        }
-
-        [Fact]
-        public async Task GivenValidItemId_WhenGetItemByIdAsync_ThenReturnsItem()
-        {
-            await using var context = GetInMemoryDbContext();
-            var repo = new ItemRepository(context);
-
-            var item = new Item { CategoryId = 2, Name = "GetById", Quantity = 7, Price = 5 };
-            await context.Items.AddAsync(item);
-            await context.SaveChangesAsync();
-
-            var result = await repo.GetItemByIdAsync(item.ItemId);
-
-            Assert.NotNull(result);
-            Assert.Equal("GetById", result.Name);
-        }
-
-        [Fact]
-        public async Task GivenCategoryId_WhenGetItemsByCategoryId_ThenReturnMatchingItems()
-        {
-            await using var context = GetInMemoryDbContext();
-            var repo = new ItemRepository(context);
-
-            await context.Items.AddRangeAsync(
-                new Item { CategoryId = 3, Name = "Item1", Quantity = 1, Price = 2 },
-                new Item { CategoryId = 3, Name = "Item2", Quantity = 1, Price = 3 },
-                new Item { CategoryId = 1, Name = "Item3", Quantity = 1, Price = 4 }
-            );
-            await context.SaveChangesAsync();
-
-            var results = repo.GetItemsByCategoryId(3).ToList();
-
-            Assert.Equal(2, results.Count);
-            Assert.All(results, i => Assert.Equal(3, i.CategoryId));
-        }
-
-        [Fact]
-        public async Task GivenUpdatedItem_WhenUpdateItem_ThenPersistsChanges()
-        {
-            await using var context = GetInMemoryDbContext();
-            var repo = new ItemRepository(context);
-
-            var item = new Item { CategoryId = 2, Name = "BeforeUpdate", Quantity = 2, Price = 20 };
-            await context.Items.AddAsync(item);
-            await context.SaveChangesAsync();
-
-            var updatedItem = new Item
-            {
-                ItemId = item.ItemId,
-                CategoryId = 2,
-                Name = "AfterUpdate",
-                Quantity = 5,
-                Price = 25
-            };
-
-            repo.UpdateItem(updatedItem);
-            await context.SaveChangesAsync();
-
-            var result = await context.Items.FindAsync(item.ItemId);
-
-            Assert.NotNull(result);
-            Assert.Equal("AfterUpdate", result!.Name);
-            Assert.Equal(5, result.Quantity);
-            Assert.Equal(25, result.Price);
-        }
-
-        [Fact]
-        public async Task GivenItems_WhenGetItems_ThenReturnAll()
-        {
-            await using var context = GetInMemoryDbContext();
-
-            await context.Items.AddRangeAsync(
-                new Item { Name = "Item1", Price = 10.0, Quantity = 5, CategoryId = 1 },
-                new Item { Name = "Item2", Price = 15.0, Quantity = 3, CategoryId = 1 }
-            );
-            await context.SaveChangesAsync();
-
-            var repo = new ItemRepository(context);
-            var items = await repo.GetItemsAsync();
-
-            Assert.Equal(2, items.Count());
-        }
+        _repository = new ItemRepository(_context, _cacheServiceMock.Object);
     }
+
+    [Fact]
+    public async Task AddItemAsync_AddsItem_And_RemovesCache()
+    {
+        var item = new Item { Name = "Test Item" };
+        _cacheServiceMock.Setup(c => c.RemoveAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
+
+        await _repository.AddItemAsync(item, "user1");
+
+        var added = await _context.Items.FirstOrDefaultAsync(i => i.Name == "Test Item");
+        Assert.NotNull(added);
+        _cacheServiceMock.Verify(c => c.RemoveAsync(It.Is<string>(k => k.Contains("items_all_user1"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteItemAsync_RemovesItem_And_ClearsCache()
+    {
+        var item = new Item { Name = "Delete Item" };
+        _context.Items.Add(item);
+        await _context.SaveChangesAsync();
+
+        _cacheServiceMock.Setup(c => c.RemoveAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
+
+        bool deleted = await _repository.DeleteItemAsync(item.ItemId, "user1");
+
+        Assert.True(deleted);
+        var exists = await _context.Items.FindAsync(item.ItemId);
+        Assert.Null(exists);
+        _cacheServiceMock.Verify(c => c.RemoveAsync(It.IsAny<string>()), Times.Exactly(2)); // item and all cache keys
+    }
+
+    [Fact]
+    public async Task GetItemByIdAsync_ReturnsCachedItem_IfExists()
+    {
+        var cachedItem = new Item { ItemId = 1, Name = "Cached Item" };
+        _cacheServiceMock.Setup(c => c.GetAsync<Item>(It.IsAny<string>()))
+            .ReturnsAsync(cachedItem);
+
+        var result = await _repository.GetItemByIdAsync(1, "user1");
+
+        Assert.Equal(cachedItem.Name, result.Name);
+        _cacheServiceMock.Verify(c => c.GetAsync<Item>(It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetItemsAsync_ReturnsCachedItemList_IfExists()
+    {
+        var cachedItems = new List<Item> { new Item { Name = "Cached1" }, new Item { Name = "Cached2" } };
+        _cacheServiceMock.Setup(c => c.GetAsync<IEnumerable<Item>>(It.IsAny<string>()))
+            .ReturnsAsync(cachedItems);
+
+        var result = await _repository.GetItemsAsync("user1");
+
+        Assert.Equal(2, ((List<Item>)result).Count);
+        _cacheServiceMock.Verify(c => c.GetAsync<IEnumerable<Item>>(It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetItemsByCategoryId_ReturnsFilteredIQueryable()
+    {
+        _context.Items.AddRange(
+            new Item { CategoryId = 1, Name = "Item1" },
+            new Item { CategoryId = 2, Name = "Item2" });
+        await _context.SaveChangesAsync();
+
+        var query = _repository.GetItemsByCategoryId(1);
+        var list = await query.ToListAsync();
+
+        Assert.Single(list);
+        Assert.Equal("Item1", list[0].Name);
+    }
+
+    [Fact]
+    public async Task UpdateItemAsync_UpdatesProperties_And_UpdatesCache()
+    {
+        var item = new Item { ItemId = 1, Name = "Old", CategoryId = 1, Price = 10, Quantity = 5 };
+        _context.Items.Add(item);
+        await _context.SaveChangesAsync();
+
+        var updatedItem = new Item { ItemId = 1, Name = "New", CategoryId = 2, Price = 20, Quantity = 10 };
+        _cacheServiceMock.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<Item>(), It.IsAny<TimeSpan>())).Returns(Task.CompletedTask);
+        _cacheServiceMock.Setup(c => c.RemoveAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
+
+        await _repository.UpdateItemAsync(updatedItem, "user1");
+
+        var dbItem = await _context.Items.FindAsync(1);
+        Assert.Equal("New", dbItem.Name);
+        Assert.Equal(2, dbItem.CategoryId);
+        Assert.Equal(20, dbItem.Price);
+        Assert.Equal(10, dbItem.Quantity);
+
+        _cacheServiceMock.Verify(c => c.SetAsync(It.Is<string>(k => k.Contains("item_user1_1")), dbItem, It.IsAny<TimeSpan>()), Times.Once);
+        _cacheServiceMock.Verify(c => c.RemoveAsync(It.Is<string>(k => k.Contains("items_all_user1"))), Times.Once);
+    }
+
+
+    public void Dispose()
+    {
+        _context.Dispose();
+    }
+}
 }

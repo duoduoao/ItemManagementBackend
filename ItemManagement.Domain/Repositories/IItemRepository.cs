@@ -1,20 +1,18 @@
 ﻿using ItemManagement.Domain.Entities;
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ItemManagement.Domain.Repositories
 {
     public interface IItemRepository : IRepository<Item>
     {
-        Task<IEnumerable<Item>> GetItemsAsync();
-        void AddItem(Item Item);
-        void UpdateItem(Item Item);
-        Task<Item> GetItemByIdAsync(int ItemId);
-      bool   DeleteItem(int ItemId);
-   
+        Task AddItemAsync(Item item, string userId, CancellationToken cancellationToken = default);
+        Task<bool> DeleteItemAsync(int itemId, string userId, CancellationToken cancellationToken = default);
+        Task<Item> GetItemByIdAsync(int itemId, string userId, CancellationToken cancellationToken = default);
+        Task<IEnumerable<Item>> GetItemsAsync(string userId, CancellationToken cancellationToken = default);
         IQueryable<Item> GetItemsByCategoryId(int categoryId);
+        Task UpdateItemAsync(Item item, string userId, CancellationToken cancellationToken = default);
     }
 }
